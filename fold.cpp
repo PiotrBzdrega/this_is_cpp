@@ -33,6 +33,8 @@ std::string fold(U,const T&... params)
 
     // return std::string(arr[U].data());
     return std::string("ass\n");
+    //TODO: return n-th param & \
+    convey string_view created inside function to caller
 }
 
 
