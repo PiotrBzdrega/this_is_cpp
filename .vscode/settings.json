@@ -57,6 +57,12 @@
         "semaphore": "cpp",
         "stop_token": "cpp",
         "thread": "cpp",
-        "iostream": "cpp"
-    }
+        "iostream": "cpp",
+        "future": "cpp",
+        "condition_variable": "cpp",
+        "mutex": "cpp",
+        "print": "cpp",
+        "text_encoding": "cpp"
+    },
+    "C_Cpp.default.compilerPath": "/usr/bin/g++"
 }

@@ -9,23 +9,63 @@ class widget
 {
 private:
     int a;
-    std::string_view b;
+    std::string b;
 public:
-    widget(widget& widget_cp);  //copy constructor
-    widget(widget&& widget_mv); //move constructor
+    widget();
+    widget(widget& other);  //copy constructor
+    widget(widget&& other); /* noexcept */ //move constructor
+    widget& operator=(const widget& other); //copy constructor
+    widget& operator=(const widget&& other); //move constructor
     ~widget();
+    void setA(int newA);
+    void setB(std::string newB);
 };
 
-// widget::move(/* args */)
-// {
-// }
 
-widget::widget(widget &move_copy)
+widget::widget()
 {
+    std::printf("constructor\n");
+}
+
+widget::widget(widget &other) : a(other.a), b(other.b)
+{
+    std::printf("copy constructor\n");
+}
+
+widget::widget(widget &&other) : a(std::move(other.a)), b(std::move(other.b))
+{
+    std::printf("move constructor\n");
+}
+
+widget &widget::operator=(const widget &other)
+{
+    a = other.a;
+    b = other.b;
+    std::printf("copy assignment\n");
+    return *this;
+}
+
+widget &widget::operator=(const widget &&other)
+{
+    a = std::move(other.a);
+    b = std::move(other.b);
+    std::printf("move assignment\n");
+    return *this;
 }
 
 widget::~widget()
 {
+    std::printf("destructor\n");
+}
+
+void widget::setA(int newA)
+{
+    a=newA;
+}
+
+void widget::setB(std::string newB)
+{
+    b=newB;
 }
 
 // TODO: Concurrency in Action  Appendix A.1 Rvalue references 1.Move semantics 357
@@ -56,12 +96,20 @@ X x3=static_cast<X&&>(x2);
 
 
 
+widget function()
+{
+    widget wid;
+    wid.setA(12);
+    wid.setB("adam");
 
+    return wid;
+}
 
 
 
 int main()
 {
+    auto x = function();
     std::printf("Hello\n");
     return 0;
 }
