@@ -25,9 +25,9 @@
 		{
 			"type": "shell",
 			"label": "run program",
-			"command":"${fileDirname}/build/${fileBasenameNoExtension}",
-			"dependsOn": "C/C++: g++"
-
+			"command": "${fileDirname}/build/${fileBasenameNoExtension}",
+			"dependsOn": "C/C++: g++",
+			"problemMatcher": []
 		}
 	]
 }
