@@ -1,5 +1,5 @@
 /* std::lock_guard
-released when goes out of scope. */
+released when goes out of scope, does not work with condition variables. */
 
 /* std::unique_lock
 std::lock_guard + manual unlocking + use with a condition_variable */
