@@ -25,8 +25,6 @@ time_change::time_change(/* args */)
     struct itimerspec timer{};
     timer.it_value.tv_sec = std::numeric_limits<time_t>::max();
 
-
-
     fd = timerfd_create(CLOCK_REALTIME, 0);
     if (fd == -1)
     {
@@ -51,6 +49,7 @@ time_change::~time_change()
 
 inline int time_change::wait()
 {
+    // TODO: is it possible to get how much system time has change ?
     uint64_t val;
     int ret;
     ret = read(fd, &val, sizeof(uint64_t));
