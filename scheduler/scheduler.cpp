@@ -44,14 +44,7 @@ private:
     std::vector<periodic_task> tasks;
     std::mutex mtx;
     std::condition_variable cv;
-    struct one_shot_t
-    {
-        std::optional<task_t> task;
-        void reset()
-        {
-            task.reset();
-        }
-    } one_shot;
+    std::optional<task_t> one_shot_task;
     std::uint16_t counter;
     struct task_in_sight_t
     {
@@ -106,7 +99,7 @@ public:
     {
         {
             std::lock_guard<std::mutex> lck(mtx);
-            one_shot.task = std::move(task_);
+            one_shot_task = std::move(task_);
         }
         cv.notify_one();
     }
@@ -185,7 +178,7 @@ void scheduler::worker(std::stop_token st)
 
             /* Wait until stop token requested, new one shot or periodic task appeared or timeout that imply need to execute next periodic task */
             cv.wait_until(lck, task_in_sight.available() ? tasks[task_in_sight.index].get_next_time_call() : std::chrono::system_clock::time_point::max(), [&]
-                          { return st.stop_requested() || one_shot.task || periodic_tasks_size != tasks.size(); });
+                          { return st.stop_requested() || one_shot_task || periodic_tasks_size != tasks.size(); });
         }
 
         // TODO: detect system time change, how much did it change, correct next time call for all tasks, if it is not possible -> store last finished execution and future call ,
@@ -199,13 +192,13 @@ void scheduler::worker(std::stop_token st)
         }
 
         /* New one shot task availble */
-        if (one_shot.task)
+        if (one_shot_task)
         {
             /* Call one shot task */
-            one_shot.task.value()();
+            one_shot_task.value()();
 
             /* Remove task */
-            one_shot.reset();
+            one_shot_task.reset();
         }
 
         {
