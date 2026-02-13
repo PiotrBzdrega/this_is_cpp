@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <ranges>
+#include <future>
 
 using namespace std::chrono_literals;
 using task_t = std::move_only_function<void()>;
@@ -43,13 +44,20 @@ private:
     std::vector<periodic_task> tasks;
     std::mutex mtx;
     std::condition_variable cv;
-    std::optional<task_t> one_shot_task;
+    struct one_shot_t
+    {
+        std::optional<task_t> task;
+        void reset()
+        {
+            task.reset();
+        }
+    } one_shot;
     std::uint16_t counter;
     struct task_in_sight_t
     {
         int index{-1};
         std::size_t id{};
-        void clear()
+        void reset()
         {
             index = -1;
             id = 0;
@@ -98,7 +106,7 @@ public:
     {
         {
             std::lock_guard<std::mutex> lck(mtx);
-            one_shot_task = std::move(task_);
+            one_shot.task = std::move(task_);
         }
         cv.notify_one();
     }
@@ -117,10 +125,23 @@ int main()
 
     std::this_thread::sleep_for(3s);
     sched.remove_periodic_task(lambda_id);
-    sched.submit_task([]()
-                      { std::println("on demand function"); });
+
+    auto prom = std::promise<std::string>{};
+    auto fut = prom.get_future();
+    /*
+    std::promise::set_value() is non-const - it modifies the promise's state
+    By default, lambda's operator() is const - all captured by-value variables are const inside
+    mutable removes the const from the lambda's operator()
+    */
+    sched.submit_task([prom = std::move(prom)]() mutable
+                      { std::println("on demand function start");
+                         std::this_thread::sleep_for(1s);
+                          std::println("on demand function finished");
+                        prom.set_value("lala finished"); });
+
     std::this_thread::sleep_for(3s);
     sched.submit_periodic_task(lambda, 2s);
+    std::println("returned future {}", fut.get());
     std::this_thread::sleep_for(15s);
 }
 
@@ -164,7 +185,7 @@ void scheduler::worker(std::stop_token st)
 
             /* Wait until stop token requested, new one shot or periodic task appeared or timeout that imply need to execute next periodic task */
             cv.wait_until(lck, task_in_sight.available() ? tasks[task_in_sight.index].get_next_time_call() : std::chrono::system_clock::time_point::max(), [&]
-                          { return st.stop_requested() || one_shot_task || periodic_tasks_size != tasks.size(); });
+                          { return st.stop_requested() || one_shot.task || periodic_tasks_size != tasks.size(); });
         }
 
         // TODO: detect system time change, how much did it change, correct next time call for all tasks, if it is not possible -> store last finished execution and future call ,
@@ -177,15 +198,14 @@ void scheduler::worker(std::stop_token st)
             return;
         }
 
-        // TODO: handle one shot task future to pass to caller
         /* New one shot task availble */
-        if (one_shot_task)
+        if (one_shot.task)
         {
             /* Call one shot task */
-            one_shot_task.value()();
+            one_shot.task.value()();
 
             /* Remove task */
-            one_shot_task.reset();
+            one_shot.reset();
         }
 
         {
@@ -207,14 +227,14 @@ void scheduler::worker(std::stop_token st)
                         // TODO: increment/decrement call_counter here
 
                         /* Drop task */
-                        task_in_sight.clear();
+                        task_in_sight.reset();
                     }
                 }
                 else
                 {
                     /* Task available but not in the same place as before, probably removed or relocated */
                     /* Drop task */
-                    task_in_sight.clear();
+                    task_in_sight.reset();
                 }
             }
         }
