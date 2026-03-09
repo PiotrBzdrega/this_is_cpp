@@ -10,12 +10,13 @@ Task compute_square(int x)
 int main(int argc, char *argv[])
 {
 
-    // auto tm = time_change();
+    auto tm = time_change();
     // while (1)
     // {
-    //     tm.wait();
+        // tm.wait();
     // }
-
-    auto task = compute_square(5);
-    std::println("Square of 5 is: {}",task.get_result());
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    std::println("after sleep");
+    // auto task = compute_square(5);
+    // std::println("Square of 5 is: {}",task.get_result());
 }

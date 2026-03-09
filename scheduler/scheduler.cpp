@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <sys/timerfd.h>
 #include <cstring>
+#include <sys/eventfd.h>
+#include <poll.h>
 
 using namespace std::chrono_literals;
 using task_t = std::move_only_function<void()>;
@@ -175,7 +177,6 @@ int main()
     sched.submit_periodic_task(lambda, 2s, 2);
     std::println("returned future {}", fut.get());
     std::this_thread::sleep_for(8s);
-    std::println("program exited");
 }
 
 void scheduler::worker(std::stop_token st)
@@ -258,7 +259,7 @@ void scheduler::worker(std::stop_token st)
                         auto new_next_call = now + (backward_diff % t.get_interval());
                         t.specify_future_call(new_next_call);
                     }
-                    else if (auto forward_diff = now - next_call ; forward_diff > 0ms)
+                    else if (auto forward_diff = now - next_call; forward_diff > 0ms)
                     {
                         /* When next_call == now -> do nix, next call is already set to correct slot */
                         ;
@@ -305,7 +306,6 @@ void scheduler::worker(std::stop_token st)
             }
         }
     }
-    std::println("worker exited");
 }
 
 void scheduler::time_change(std::stop_token st)
@@ -315,43 +315,64 @@ void scheduler::time_change(std::stop_token st)
     uint64_t val;
     int ret;
 
-    int fd = timerfd_create(CLOCK_REALTIME, 0);
-    if (fd == -1)
+    int timer_fd = timerfd_create(CLOCK_REALTIME, 0);
+    int stop_fd = eventfd(0, 0);
+    if (timer_fd == -1 || stop_fd == -1)
     {
         std::println("timerfd_create failed: {}", std::strerror(errno));
         return;
     }
 
-    if (timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &timer, nullptr) == -1)
+    if (timerfd_settime(timer_fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &timer, nullptr) == -1)
     {
         std::println("timerfd_settime failed: {}", std::strerror(errno));
         return;
     }
 
-    std::stop_callback cb(st, [&fd]
-                          { std::println("time change exited1 fd={}, thread={} close={}",fd,std::this_thread::get_id(),close(fd)); });
+    std::stop_callback cb(st, [&stop_fd]
+                          {    
+        if (stop_fd >= 0)
+        {
+            uint64_t v = 1;
+            write(stop_fd, &v, sizeof(v));
+        } });
+
+    struct pollfd fds[2]{
+        {timer_fd, POLLIN, 0},
+        {stop_fd, POLLIN, 0}};
 
     while (!st.stop_requested())
     {
-        std::println("start to read fd={}, thread={}",fd,std::this_thread::get_id());
-        ret = read(fd, &val, sizeof(uint64_t));
-        if (st.stop_requested())
-        {
-            break;
-        }
-        
-        // TODO: make sure what reason cause what result error
-        std::println("Time has changed! ret={}/{}", ret, ret == -1 ? std::strerror(errno) : "");
-        std::println("{}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+        int ret = poll(fds, 2, -1);
 
+        if (ret < 0)
         {
-            std::lock_guard<std::mutex> lck(mtx);
-            time_change_detected = true;
+            std::println("poll error: {}", std::strerror(errno));
         }
-        cv.notify_one();
+
+        if (fds[1].revents & POLLIN)
+        {
+            uint64_t v;
+            read(stop_fd, &v, sizeof(v));
+            std::println("stop event received");
+        }
+
+        if (fds[0].revents & POLLIN)
+        {
+            uint64_t val;
+            auto r = read(timer_fd, &val, sizeof(val));
+
+            std::println("Time has changed! ret={}/{}", r, r == -1 ? std::strerror(errno) : "");
+            std::println("{}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+            {
+                std::lock_guard<std::mutex> lck(mtx);
+                time_change_detected = true;
+            }
+            cv.notify_one();
+        }
     }
-    std::println("time change exited2");
-
+    close(timer_fd);
+    close(stop_fd);
 }
 
 scheduler::scheduler()
@@ -375,6 +396,4 @@ scheduler::~scheduler()
         thr_time_change.request_stop();
         thr_time_change.join();
     }
-
-    std::println("scheduler destructor exited2");
 }
