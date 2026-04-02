@@ -1,3 +1,8 @@
+/**
+ * PROBABLY NOT FINISHED
+ * FINAL WORKING IMPLEMENTATION
+ * IN PAYLINK
+ */
 #include <print>
 #include <chrono>
 #include <condition_variable>
@@ -7,16 +12,10 @@
 #include <optional>
 #include <ranges>
 #include <future>
-#include <variant>
-#include <unistd.h>
-#include <sys/timerfd.h>
-#include <cstring>
-#include <sys/eventfd.h>
-#include <poll.h>
 
 using namespace std::chrono_literals;
 using task_t = std::move_only_function<void()>;
-using clock_ms = std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>;
+using clock_ms = std::chrono::time_point<std::chrono::steady_clock, std::chrono::milliseconds>;
 
 using repeat_t = std::optional<uint32_t>;
 
@@ -32,23 +31,19 @@ private:
     clock_ms next_time_call{};
     void specify_future_call()
     {
-        next_time_call = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now()) + interval;
+        next_time_call = std::chrono::floor<std::chrono::milliseconds>(std::chrono::steady_clock::now()) + interval;
     }
 
 public:
     explicit task(task_t &&t_, std::chrono::milliseconds interval_, std::size_t id_, repeat_t repeat_, std::chrono::seconds startup_delay_ = 0s) : t(std::move(t_)),
                                                                                                                                                    interval(interval_), id(id_),
-                                                                                                                                                   next_time_call(std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now()) - interval_ + startup_delay_),
+                                                                                                                                                   next_time_call(std::chrono::floor<std::chrono::milliseconds>(std::chrono::steady_clock::now()) - interval_ + startup_delay_),
                                                                                                                                                    repeat(repeat_) {}
 
     auto get_next_time_call() const { return next_time_call; }
     auto get_id() const { return id; }
     auto get_interval() const { return interval; }
     auto get_repeat() const { return repeat; }
-    void specify_future_call(clock_ms &next_time_call_)
-    {
-        next_time_call = next_time_call_;
-    }
     /**
      * @brief execute task, then override next future time call
      * @return if repeat counter reached zero
@@ -77,12 +72,10 @@ class scheduler
 {
 private:
     std::jthread thr_worker;
-    std::jthread thr_time_change;
     std::vector<task> tasks;
     std::mutex mtx;
     std::condition_variable cv;
     std::uint16_t counter;
-    bool time_change_detected{};
     struct task_in_sight_t
     {
         int index{-1};
@@ -95,7 +88,6 @@ private:
         bool available() const { return index != -1; }
     } task_in_sight;
     void worker(std::stop_token st);
-    void time_change(std::stop_token st);
     bool remove_task_(std::size_t id_)
     {
         for (const auto &[task_i, task_ref] : std::views::enumerate(tasks))
@@ -113,7 +105,7 @@ private:
 public:
     scheduler(/* args */);
     ~scheduler();
-    std::size_t submit_periodic_task(task_t &&t_, std::chrono::milliseconds interval_, uint32_t repeat_)
+    std::size_t submit_periodic_task(task_t &&t_, std::chrono::milliseconds interval_, uint32_t repeat_= 0)
     {
         repeat_t r = repeat_ > 0 ? repeat_t{repeat_ - 1} : std::nullopt;
         auto id = std::hash<std::string_view>{}(std::to_string(counter++));
@@ -153,9 +145,13 @@ int main()
     {
         std::println("adamek");
     };
-    auto lambda_id = sched.submit_periodic_task(lambda, 1000ms, 0);
-    sched.submit_periodic_task([]()
-                               { std::println("{}", std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now())); }, 500ms, 0);
+    auto lambda_id = sched.submit_periodic_task(lambda, 1000ms);
+    std::string some_string{"no-value"};
+    sched.submit_periodic_task([&some_string]()
+                               {  auto now =  std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
+                                std::println("set {}", now); some_string = std::format("{}",now); }, 500ms);
+    sched.submit_periodic_task([&some_string]()
+                               { std::println("get {}", some_string); }, 700ms);                            
 
     std::this_thread::sleep_for(3s);
     sched.remove_task(lambda_id);
@@ -181,8 +177,6 @@ int main()
 
 void scheduler::worker(std::stop_token st)
 {
-
-    bool wait_pred{};
     while (!st.stop_requested())
     {
 
@@ -218,8 +212,8 @@ void scheduler::worker(std::stop_token st)
             auto periodic_tasks_size = tasks.size();
 
             /* Wait until stop token requested, periodic task appeared or timeout that imply need to execute next periodic task */
-            cv.wait_until(lck, task_in_sight.available() ? tasks[task_in_sight.index].get_next_time_call() : std::chrono::system_clock::time_point::max(), [&]
-                          { return st.stop_requested() || periodic_tasks_size != tasks.size() || time_change_detected; });
+            cv.wait_until(lck, task_in_sight.available() ? tasks[task_in_sight.index].get_next_time_call() : std::chrono::steady_clock::time_point::max(), [&]
+                          { return st.stop_requested() || periodic_tasks_size != tasks.size(); });
         }
 
         // TODO: detect system time change, how much did it change, correct next time call for all tasks, if it is not possible -> store last finished execution and future call ,
@@ -234,55 +228,13 @@ void scheduler::worker(std::stop_token st)
             /* lock function scope */
             std::lock_guard<std::mutex> lck(mtx);
 
-            /* system time has been modified */
-            if (time_change_detected)
-            {
-                time_change_detected = false;
-                auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
-
-                /* loop through all periodic tasks */
-                for (auto &t : tasks)
-                {
-                    auto last_call = t.get_next_time_call() - t.get_interval();
-                    auto next_call = t.get_next_time_call();
-
-                    /*  */
-                    if (auto backward_diff = last_call - now; backward_diff > 0ms)
-                    {
-                        /* When last_call == now -> do nix, next call is set with interval */
-                        ;
-
-                        /* (now) < (last_call) < (next_call) */
-                        /* (now) <= (new_next_call) <= (last_call)*/
-                        /* Find next slot to fits "every x clock units" for task execution */
-                        /* If backward_diff < task interval -> it will be set to last_call */
-                        auto new_next_call = now + (backward_diff % t.get_interval());
-                        t.specify_future_call(new_next_call);
-                    }
-                    else if (auto forward_diff = now - next_call; forward_diff > 0ms)
-                    {
-                        /* When next_call == now -> do nix, next call is already set to correct slot */
-                        ;
-
-                        /* (last_call) < (next_call) < (now) */
-                        /* (next_call) <= (new_next_call) <= (now) */
-                        /* Find next slot to fits "every x clock units" for task execution */
-                        /* If forward_diff < task interval -> set next call in difference of these two values */
-                        auto new_next_call = now + ((forward_diff < t.get_interval()) ? t.get_interval() - forward_diff : forward_diff % t.get_interval());
-                        t.specify_future_call(new_next_call);
-                    }
-                }
-
-                continue;
-            }
-
             if (task_in_sight.available())
             {
                 if (tasks.size() - 1 >= task_in_sight.index &&
                     task_in_sight.id == tasks[task_in_sight.index].get_id())
                 {
                     auto &t = tasks[task_in_sight.index];
-                    auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
+                    auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::steady_clock::now());
 
                     if (t.get_next_time_call() <= now)
                     {
@@ -306,79 +258,13 @@ void scheduler::worker(std::stop_token st)
             }
         }
     }
-}
 
-void scheduler::time_change(std::stop_token st)
-{
-    struct itimerspec timer{};
-    timer.it_value.tv_sec = std::numeric_limits<time_t>::max();
-    uint64_t val;
-    int ret;
-
-    int timer_fd = timerfd_create(CLOCK_REALTIME, 0);
-    int stop_fd = eventfd(0, 0);
-    if (timer_fd == -1 || stop_fd == -1)
-    {
-        std::println("timerfd_create failed: {}", std::strerror(errno));
-        return;
-    }
-
-    if (timerfd_settime(timer_fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &timer, nullptr) == -1)
-    {
-        std::println("timerfd_settime failed: {}", std::strerror(errno));
-        return;
-    }
-
-    std::stop_callback cb(st, [&stop_fd]
-                          {    
-        if (stop_fd >= 0)
-        {
-            uint64_t v = 1;
-            write(stop_fd, &v, sizeof(v));
-        } });
-
-    struct pollfd fds[2]{
-        {timer_fd, POLLIN, 0},
-        {stop_fd, POLLIN, 0}};
-
-    while (!st.stop_requested())
-    {
-        int ret = poll(fds, 2, -1);
-
-        if (ret < 0)
-        {
-            std::println("poll error: {}", std::strerror(errno));
-        }
-
-        if (fds[1].revents & POLLIN)
-        {
-            uint64_t v;
-            read(stop_fd, &v, sizeof(v));
-            std::println("stop event received");
-        }
-
-        if (fds[0].revents & POLLIN)
-        {
-            uint64_t val;
-            auto r = read(timer_fd, &val, sizeof(val));
-
-            std::println("Time has changed! ret={}/{}", r, r == -1 ? std::strerror(errno) : "");
-            std::println("{}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
-            {
-                std::lock_guard<std::mutex> lck(mtx);
-                time_change_detected = true;
-            }
-            cv.notify_one();
-        }
-    }
-    close(timer_fd);
-    close(stop_fd);
+    std::println("worker finished");
 }
 
 scheduler::scheduler()
 {
     thr_worker = std::jthread(std::bind_front(&scheduler::worker, this));
-    thr_time_change = std::jthread(std::bind_front(&scheduler::time_change, this));
     /* thr_time_change = std::jthread([this, &network_config](std::stop_token stoken)
                                       { this->serverHandler(stoken, network_config); }); */
 }
@@ -389,11 +275,5 @@ scheduler::~scheduler()
     {
         thr_worker.request_stop();
         thr_worker.join();
-    }
-
-    if (thr_time_change.joinable())
-    {
-        thr_time_change.request_stop();
-        thr_time_change.join();
     }
 }
