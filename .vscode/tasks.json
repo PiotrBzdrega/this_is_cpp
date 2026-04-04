@@ -2,16 +2,16 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"type": "cppbuild",
-			"label": "C/C++: g++",
+			"type": "shell",
+			"label": "C/C++: g++ all *cpp",
 			"command": "/usr/bin/g++",
 			"args": [
 				"-fdiagnostics-color=always",
 				"-std=c++23",
 				"-g",
-				"${file}",
+				"${fileDirname}/*.cpp",
 				"-o",
-				"${fileDirname}/build/${fileBasenameNoExtension}",
+				"${fileDirname}/build/${fileDirnameBasename}",
 				"-g3"
 			],
 			"options": {
@@ -22,19 +22,19 @@
 			],
 			"group": "build",
 			"detail": "compiler: /usr/bin/g++",
-			"dependsOn": "Clean binary"
+			"dependsOn": [ "Clean build", "Create build dir"] 
 		},
 		{
-			"type": "cppbuild",
-			"label": "C/C++: arm",
+			"type": "shell",
+			"label": "C/C++: arm all *cpp",
 			"command": "arm-linux-gnueabihf-g++-14",
 			"args": [
 				"-fdiagnostics-color=always",
 				"-std=c++23",
 				"-g",
-				"${file}",
+				"${fileDirname}/*.cpp",
 				"-o",
-				"${fileDirname}/build/${fileBasenameNoExtension}_armv7",
+				"${fileDirname}/build/${fileDirnameBasename}_armv7",
 				"-g3"
 			],
 			"options": {
@@ -45,14 +45,28 @@
 			],
 			"group": "build",
 			"detail": "compiler: /usr/bin/g++",
+			"dependsOn": [ "Clean build", "Create build dir"]
 		},
 		{
-			"label": "Clean binary",
+			"label": "Clean build",
 			"type": "shell",
 			"command": "rm",
 			"args": [
 				"-rf",
-				"${fileDirname}/build/*"
+				"${fileDirname}/build"
+			],
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": false
+			}
+		},
+		{
+			"label": "Create build dir",
+			"type": "shell",
+			"command": "mkdir",
+			"args": [
+				"${fileDirname}/build"
 			],
 			"problemMatcher": [],
 			"group": {
@@ -63,8 +77,8 @@
 		{
 			"type": "shell",
 			"label": "run program",
-			"command": "${fileDirname}/build/${fileBasenameNoExtension}",
-			"dependsOn": "C/C++: g++",
+			"command": "${fileDirname}/build/${fileDirnameBasename}",
+			"dependsOn": "C/C++: g++ all *cpp",
 			"problemMatcher": []
 		}
 	]
